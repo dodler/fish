@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
 
 def to_tensor(img):
@@ -16,8 +16,9 @@ def to_tensor(img):
 
 
 class SeameseFishDs:
-    def __init__(self, df, path, aug, min_num_pairs=5):
-        self.min_num_pairs = min_num_pairs
+    def __init__(self, df, path, aug, positive_pair_num=10,negative_pair_num=50):
+        self.positive_pair_num = positive_pair_num
+        self.negative_pair_num = negative_pair_num
         self.df = df
         print(df.head())
         self.path = path
@@ -44,25 +45,23 @@ class SeameseFishDs:
         labels = []
 
         for idx in tqdm(pair2img.keys()):
-            pair_idx = idx
-            label = float(pair_idx == idx)
-
-            labels.append(label)
-
-            img = osp.join(self.path, random.choice(pair2img[idx]))
-            pair_img = osp.join(self.path, random.choice(pair2img[pair_idx]))
-
-            self.pairs.append((img, pair_img, label))
-            for i in range(self.min_num_pairs):
-                pair_idx = random.choice(pair_img_keys)
-                label = 1-float(pair_idx == idx)
-
+            for i in range(self.positive_pair_num):
+                pair_idx = idx
+                label = 1.0
                 labels.append(label)
+                img = osp.join(self.path, random.choice(pair2img[idx]))
+                pair_img = osp.join(self.path, random.choice(pair2img[pair_idx]))
+                self.pairs.append((img, pair_img, label))
 
+            for i in range(self.negative_pair_num):
+                pair_idx = random.choice(pair_img_keys)
+                if pair_idx == idx:
+                    continue
+                labels.append(0)
                 img = osp.join(self.path, random.choice(pair2img[idx]))
                 pair_img = osp.join(self.path, random.choice(pair2img[pair_idx]))
 
-                self.pairs.append((img, pair_img, label))
+                self.pairs.append((img, pair_img, 0))
 
         print(np.histogram(labels, bins=3))
         print('pairs done,', self.pairs[0:5], ',')
@@ -91,6 +90,9 @@ class SeameseFishDs:
         img = cv2.imread(img)
         img_pair = cv2.imread(img_pair)
 
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img_pair = cv2.cvtColor(img_pair, cv2.COLOR_BGR2RGB)
+
         if self.aug is not None:
             img = self.aug(image=img)['image']
             img_pair = self.aug(image=img_pair)['image']
@@ -98,14 +100,45 @@ class SeameseFishDs:
         img = to_tensor(img)
         img_pair = to_tensor(img_pair)
 
-        label = torch.Tensor([label])
+        label = torch.ones(1) * label
 
         return (img, img_pair), label
 
 
-def get_ds(train_aug=None, valid_aug=None, path='/home/lyan/Documents/fish', encode_labels=False):
+class FishDs:
+    def __init__(self, df, path, aug):
+        self.df = df
+        self.path = path
+        self.aug = aug
+
+    def __len__(self):
+        return self.df.shape[0]
+
+    def __getitem__(self, item):
+        img = cv2.imread(osp.join(self.path, self.df.Image[item]))
+
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        if self.aug is not None:
+            img = self.aug(image=img)['image']
+
+        img = to_tensor(img)
+
+        label = torch.Tensor([self.df.Id[item].astype(np.long)]).long()
+
+        return img, label
+
+
+def get_seamese_ds(train_aug=None, valid_aug=None, path='/home/lyan/Documents/fish',
+                   encode_labels=False,
+                   drop_new_whale=True):
+
     train = pd.read_csv(osp.join(path, 'train.csv'))
 
+    if drop_new_whale:
+        train = train[train.Id != 'new_whale']
+
+    encoder = None
     if encode_labels:
         encoder = LabelEncoder()
         train.Id = encoder.fit_transform(train.Id)
@@ -117,4 +150,35 @@ def get_ds(train_aug=None, valid_aug=None, path='/home/lyan/Documents/fish', enc
     train_ds = SeameseFishDs(train, osp.join(path, 'train'), train_aug)
     valid_ds = SeameseFishDs(valid, osp.join(path, 'train'), valid_aug)
 
-    return train_ds, valid_ds
+    if encode_labels:
+        return train_ds, valid_ds, encoder
+    else:
+        return train_ds, valid_ds
+
+
+def get_classif_ds(train_aug=None, valid_aug=None,
+                   path='/home/lyan/Documents/fish',
+                   encode_labels=True,
+                   drop_new_whale=True):
+    train = pd.read_csv(osp.join(path, 'train.csv'))
+
+    if drop_new_whale:
+        print('shape before dropping', train.Id.shape)
+        train = train[train.Id != 'new_whale']
+        print('shape after dropping', train.Id.shape)
+
+    if encode_labels:
+        encoder = LabelEncoder()
+        train.Id = encoder.fit_transform(train.Id)
+
+    train, valid = train_test_split(train)
+    train.reset_index(inplace=True)
+    valid.reset_index(inplace=True)
+
+    train_ds = FishDs(train, osp.join(path, 'train'), train_aug)
+    valid_ds = FishDs(valid, osp.join(path, 'train'), valid_aug)
+
+    if not encode_labels:
+        return train_ds, valid_ds, encoder
+    else:
+        return train_ds, valid_ds

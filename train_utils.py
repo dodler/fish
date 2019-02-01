@@ -1,18 +1,41 @@
-from catalyst.dl.callbacks import MultiMetricCallback, metrics
+import torch
+
+from catalyst.dl.callbacks import MultiMetricCallback, metrics, Callback, UtilsFactory
 from catalyst.dl.metrics import average_precision
 from catalyst.dl.runner import BaseModelRunner
 from typing import Dict, List
 import torch.nn as nn
 import numpy as np
 from catalyst.dl.state import RunnerState
+from torch import optim
 
 
 class SeameseRunner(BaseModelRunner):
+
+    def __init__(self,
+                 model: nn.Module,
+                 criterion: nn.Module = None,
+                 optimizer: optim.Optimizer = None,
+                 scheduler: optim.lr_scheduler._LRScheduler = None):
+        super(SeameseRunner, self).__init__(model, criterion, optimizer, scheduler)
+
     def batch2device(self, *, dct: Dict, state: RunnerState = None):
+
         if isinstance(dct, (tuple, list)):
             assert len(dct) == 2
             dct = {"features": dct[0], "targets": dct[1]}
-        dct = super().batch2device(dct=dct, state=state)
+
+        if state is not None:
+            dct = {
+                "features": [
+                    dct["features"][0].to(0),
+                    dct["features"][1].to(0)
+                ],
+                "targets": dct['targets'].to(0)
+            }
+        else:
+            dct = {key: value.to(self.device) for key, value in dct.items()}
+
         return dct
 
     def batch_handler(
