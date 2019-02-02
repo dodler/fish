@@ -8,6 +8,20 @@ import torch
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
+bb = pd.read_csv('bounding_boxes.csv')
+
+
+def read_img(img_path, crop=True):
+    img_name = img_path.split('/')[-1]
+    box = bb[bb.Image == img_name]
+
+    img = cv2.imread(img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    if crop:
+        img = img[box.y0.values[0]:box.y1.values[0], box.x0.values[0]:box.x1.values[0], :]
+
+    return img
+
 
 def to_tensor(img):
     img = img.astype(np.float32) / 255.0 - 0.5
@@ -16,7 +30,7 @@ def to_tensor(img):
 
 
 class SeameseFishDs:
-    def __init__(self, df, path, aug, positive_pair_num=10,negative_pair_num=50):
+    def __init__(self, df, path, aug, positive_pair_num=5, negative_pair_num=15):
         self.positive_pair_num = positive_pair_num
         self.negative_pair_num = negative_pair_num
         self.df = df
@@ -87,11 +101,8 @@ class SeameseFishDs:
 
         img, img_pair, label = self.pairs[item]
 
-        img = cv2.imread(img)
-        img_pair = cv2.imread(img_pair)
-
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img_pair = cv2.cvtColor(img_pair, cv2.COLOR_BGR2RGB)
+        img = read_img(img)
+        img_pair = read_img(img_pair)
 
         if self.aug is not None:
             img = self.aug(image=img)['image']
@@ -115,9 +126,8 @@ class FishDs:
         return self.df.shape[0]
 
     def __getitem__(self, item):
-        img = cv2.imread(osp.join(self.path, self.df.Image[item]))
-
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img_path = osp.join(self.path, self.df.Image[item])
+        img = read_img(img_path)
 
         if self.aug is not None:
             img = self.aug(image=img)['image']
@@ -132,7 +142,6 @@ class FishDs:
 def get_seamese_ds(train_aug=None, valid_aug=None, path='/home/lyan/Documents/fish',
                    encode_labels=False,
                    drop_new_whale=True):
-
     train = pd.read_csv(osp.join(path, 'train.csv'))
 
     if drop_new_whale:
@@ -178,7 +187,7 @@ def get_classif_ds(train_aug=None, valid_aug=None,
     train_ds = FishDs(train, osp.join(path, 'train'), train_aug)
     valid_ds = FishDs(valid, osp.join(path, 'train'), valid_aug)
 
-    if not encode_labels:
+    if encode_labels:
         return train_ds, valid_ds, encoder
     else:
         return train_ds, valid_ds
