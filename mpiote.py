@@ -31,8 +31,6 @@ import os
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 
-# In[2]:
-
 
 # Read the dataset description
 import gzip
@@ -747,10 +745,10 @@ def make_steps(step, ampl):
 histories = []
 steps = 0
 
-if isfile('mpiotte-standard.model'):
-    tmp = keras.models.load_model('mpiotte-standard.model')
-    model.set_weights(tmp.get_weights())
-else:
+# if isfile('mpiotte-standard.model'):
+#     tmp = keras.models.load_model('mpiotte-standard.model')
+#     model.set_weights(tmp.get_weights())
+if True:
     # epoch -> 10
     make_steps(10, 1000)
     ampl = 100.0

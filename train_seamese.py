@@ -9,19 +9,19 @@ print(torch.cuda.device_count())
 from catalyst.dl.callbacks import (
     LossCallback,
     Logger, TensorboardLogger,
-    OptimizerCallback, SchedulerCallback, CheckpointCallback,
-    PrecisionCallback, OneCycleLR)
+    OptimizerCallback, CheckpointCallback,
+    OneCycleLR)
 from torch.utils.data import DataLoader
 
-from dataset import get_seamese_ds
+from data.ds_factory import get_siamese_ds_no_new_whale_label_encode
 from losses import ContrastiveLoss
 from models import get_model
-from train_utils import SeameseRunner, MAPCallback
+from train_utils import SeameseRunner
 from utils import get_aug
 
 train_aug, valid_aug = get_aug()
 
-train_ds, valid_ds = get_seamese_ds(train_aug, valid_aug)
+train_ds, valid_ds = get_siamese_ds_no_new_whale_label_encode(train_aug, valid_aug)
 
 train_loader = DataLoader(train_ds, shuffle=True, num_workers=10, pin_memory=True, batch_size=128)
 valid_loader = DataLoader(valid_ds, shuffle=False, num_workers=10, pin_memory=True, batch_size=128)

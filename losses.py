@@ -1,44 +1,21 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class ContrastiveLoss(torch.nn.Module):
+class ContrastiveLoss(nn.Module):
     """
-    Contrastive loss function.
-    Based on:
+    Takes embeddings of two samples and a target label == 1
+    if samples are from the same class and label == 0 otherwise
     """
 
-    def __init__(self, margin=1.0):
+    def __init__(self, margin=5.):
         super(ContrastiveLoss, self).__init__()
         self.margin = margin
 
-    def check_type_forward(self, in_types):
-        assert len(in_types) == 3
-
-        x0_type, x1_type, y_type = in_types
-        assert x0_type.size() == x1_type.shape
-        assert x1_type.size()[0] == y_type.shape[0]
-        assert x1_type.size()[0] > 0
-        assert x0_type.dim() == 2
-        assert x1_type.dim() == 2
-        assert y_type.dim() == 1
-
-    def forward(self, pair, y):
-        x0, x1 = pair
-        x0 = x0.squeeze()
-        x1 = x1.squeeze()
-        y = y.squeeze()
-
-        self.check_type_forward((x0, x1, y))
-
-        # euclidian distance
-        diff = x0 - x1
-        dist_sq = torch.sum(torch.pow(diff, 2), 1)
-        dist = torch.sqrt(dist_sq)
-
-        mdist = self.margin - dist
-        dist = torch.clamp(mdist, min=0.0)
-        loss = y * dist_sq + (1 - y) * torch.pow(dist, 2)
-        loss = torch.sum(loss) / 2.0 / x0.size()[0]
-        return loss
+    def forward(self, ops, target, size_average=True):
+        op1, op2 = ops[0], ops[1]
+        dist = F.pairwise_distance(op1, op2)
+        pdist = dist * target
+        ndist = dist * (1 - target)
+        loss = 0.5 * ((pdist ** 2) + (F.relu(self.margin - ndist) ** 2))
+        return loss.mean()

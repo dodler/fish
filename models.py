@@ -13,12 +13,12 @@ def get_model(model_name='seamese_resnet34'):
     elif model_name == 'classif_se_resnet50':
         return classification_se_resnext50()
     elif model_name == 'classif_se_resnet101':
-        return classification_se_resnet101(no_new_whale=True)
+        return classification_se_resnet101(no_new_whale=False)
 
 
 def classification_se_resnet101(no_new_whale=True):
     model = se_resnet101(pretrained='imagenet')
-    model.avg_pool = nn.AvgPool2d(7,stride=1)
+    model.avg_pool = nn.AvgPool2d(7, stride=1)
     if no_new_whale:
         model.last_linear = nn.Sequential(
             nn.Linear(2048, 5004)
@@ -31,9 +31,10 @@ def classification_se_resnet101(no_new_whale=True):
 
     return model
 
+
 def classification_resnet34():
     model = resnet34(pretrained='imagenet')
-    model.fc = nn.Linear(512, 5005)
+    model.fc = nn.Linear(512, 5004)
     return model
 
 
@@ -65,7 +66,7 @@ class SEResnext50Seamese(nn.Module):
         super(SEResnext50Seamese, self).__init__()
 
         self.model = se_resnext50_32x4d(pretrained='imagenet')
-        self.model.fc = nn.Linear(2048, 256)
+        self.model.last_linear = nn.Linear(2048, 256)
 
     def forward(self, img_pair):
         return (self.model(img_pair[0]), self.model(img_pair[1]))

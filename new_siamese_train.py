@@ -2,6 +2,7 @@ import os
 import time
 
 from sklearn.neighbors import NearestNeighbors
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import *
 from tensorboardX import SummaryWriter
 from args import get_parser
@@ -14,20 +15,25 @@ torch.cuda.set_device(0)
 print(torch.cuda.device_count())
 from torch.utils.data import DataLoader
 
-from dataset import get_seamese_ds, get_classif_ds
+from data.ds_factory import get_classification_ds_with_new_whale, get_siamese_ds_no_new_whale_label_encode
 from losses import ContrastiveLoss
 from models import get_model
 from utils import get_aug, map_per_set
 import numpy as np
+import os.path as osp
 
 DISP_NUM = 8
 
 parser = get_parser()
 args = parser.parse_args()
 
+checkpoints_directory = osp.join('checkpoints', args.name)
+if not osp.exists(checkpoints_directory):
+    os.mkdir(checkpoints_directory)
+
 train_aug, valid_aug = get_aug()
 
-train_ds, valid_ds, encoder = get_seamese_ds(train_aug, valid_aug, drop_new_whale=False, encode_labels=True)
+train_ds, valid_ds, encoder = get_siamese_ds_no_new_whale_label_encode(train_aug, valid_aug, encode_labels=True)
 
 train_loader = DataLoader(train_ds, shuffle=True, num_workers=10, pin_memory=True, batch_size=args.batch_size)
 valid_loader = DataLoader(valid_ds, shuffle=False, num_workers=10, pin_memory=True, batch_size=args.batch_size)
@@ -37,18 +43,29 @@ model.to(0)
 model.train()
 
 criterion = ContrastiveLoss()
-optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, weight_decay=5e-4, lr=5e-5)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=2, verbose=True)
+optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, weight_decay=5e-4, lr=5e-2)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5,
+                                                       patience=2,
+                                                       verbose=True)
+
+lr_scheduler = ReduceLROnPlateau(patience=1000, verbose=True,
+                                 optimizer=optimizer)  # i will try to use it for iteration scheduling
 
 writer = SummaryWriter(log_dir='/tmp/runs_new')
 
 stp = 0
 
 
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
+
+
 def print_loss(loss, accu, out1, out2, labels):
     global stp
     writer.add_scalar('loss', loss, global_step=stp)
     writer.add_scalar('accu', accu, global_step=stp)
+    writer.add_scalar('lr', get_lr(optimizer), global_step=stp)
 
     r = ''
     for i in range(DISP_NUM):
@@ -62,6 +79,8 @@ def print_loss(loss, accu, out1, out2, labels):
 
 
 def train(epoch):
+    global stp
+
     train_loss = []
     model.train()
     start = time.time()
@@ -83,6 +102,8 @@ def train(epoch):
 
         accuracy = []
 
+        lr_scheduler.step(loss, stp)
+
         for idx, logit in enumerate([output1, output2]):
             corrects = (torch.max(logit, 1)[1].data == labels.long().data).sum()
             accu = float(corrects) / float(labels.size()[0])
@@ -103,7 +124,7 @@ def train(epoch):
                            100. * batch_idx / len(train_loader), loss.item(),
                     took, idx, accu * 100.))
             start = time.time()
-    torch.save(model.state_dict(), f'{args.name}_{epoch}_{loss}.pth')
+    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{loss}.pth'))
     end = time.time()
     took = end - start_epoch
     print('Train epoch: {} \tTook:{:.2f}'.format(epoch, took))
@@ -117,7 +138,7 @@ def validate():
 
     _, aug = get_aug()
 
-    cls_train_ds, cls_valid_ds, enc = get_classif_ds(aug, aug, drop_new_whale=False, encode_labels=True)
+    cls_train_ds, cls_valid_ds, enc = get_classification_ds_with_new_whale(aug, aug, encode_labels=True)
 
     cls_valid_loader = DataLoader(cls_valid_ds, shuffle=False, num_workers=20, pin_memory=True, batch_size=128)
     cls_train_loader = DataLoader(cls_train_ds, shuffle=False, num_workers=20, pin_memory=True, batch_size=128)
@@ -137,15 +158,15 @@ def validate():
     train_embs = np.concatenate([k.detach().cpu().numpy() for k in train_embs])
     valid_embs = np.concatenate([k.detach().cpu().numpy() for k in valid_embs])
 
-    gt = enc.inverse_transform(cls_valid_ds.df.Id)
+    gt = enc.inverse_transform(cls_train_ds.labels)
     print('fitting knn')
     knn = NearestNeighbors(n_neighbors=16)
-    knn.fit(train_embs, cls_train_ds.df.Id)
+    knn.fit(train_embs, cls_train_ds.labels)
 
     nbrs_5 = knn.kneighbors(valid_embs)
     predictions = []
-    for i in tqdm(range(cls_valid_ds.df.shape[0])):
-        labels, counts = np.unique(cls_train_ds.df.Id[nbrs_5[1][i]].values, return_counts=True)
+    for i in tqdm(range(cls_valid_ds.labels.shape[0])):
+        labels, counts = np.unique(cls_train_ds.labels[nbrs_5[1][i]], return_counts=True)
         labels = labels[np.argsort(counts)[::-1][:5]]
 
         predictions.append(enc.inverse_transform(labels).tolist())
@@ -153,7 +174,7 @@ def validate():
     print(map_per_set(gt, predictions))
 
 
-validate()
+validate()  # imagenet weights validation
 for i in range(args.epochs):
     train(i)
     if i % 3 == 0:
