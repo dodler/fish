@@ -111,7 +111,7 @@ class FishDs:
         return self.images.shape[0]
 
     def __getitem__(self, item):
-        item = random.randrange(0, self.images.shape[0])
+        # item = random.randrange(0, self.images.shape[0])
 
         img_path = osp.join(self.path, self.images[item])
         img = read_img(img_path)

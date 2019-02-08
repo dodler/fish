@@ -1,15 +1,17 @@
 import numpy as np
-from albumentations import Resize, RandomGamma, Rotate, Compose, HueSaturationValue
+from albumentations import Resize, RandomGamma, Rotate, Compose, HueSaturationValue, OneOf
 
 
 def get_aug():
     return Compose([
-        HueSaturationValue(p=0.7),
-        RandomGamma(p=0.7),
+        OneOf([
+            HueSaturationValue(p=0.7),
+            RandomGamma(p=0.7),
+        ]),
         Rotate(limit=(-20,20),p=0.7),
-        Resize(width=224, height=224)
+        Resize(width=384, height=384)
     ]), Compose([
-        Resize(width=224, height=224)
+        Resize(width=384, height=384)
     ])
 
 

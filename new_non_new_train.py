@@ -1,13 +1,16 @@
+import bottleneck
 import os
 import time
 
-from sklearn.metrics import average_precision_score, accuracy_score
-from sklearn.neighbors import NearestNeighbors
-from torch.nn import BCEWithLogitsLoss
+from sklearn.metrics import accuracy_score
+from tensorboardX import SummaryWriter
+from torch.nn import CrossEntropyLoss
+import torch.nn.functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import *
-from tensorboardX import SummaryWriter
+
 from args import get_parser
+from models.factory import get_model
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -17,10 +20,8 @@ torch.cuda.set_device(0)
 print(torch.cuda.device_count())
 from torch.utils.data import DataLoader
 
-from data.ds_factory import get_classification_ds_with_new_whale, get_siamese_ds_no_new_whale_label_encode
-from losses import ContrastiveLoss
-from models import get_model
-from utils import get_aug, map_per_set
+from data.ds_factory import get_classification_ds_with_new_whale
+from utils import get_aug
 import numpy as np
 import os.path as osp
 
@@ -39,7 +40,7 @@ train_ds, valid_ds, encoder = get_classification_ds_with_new_whale(
     train_aug,
     valid_aug,
     encode_labels=True,
-    encoder_type='one_hot')
+    encoder_type='label')
 
 train_loader = DataLoader(train_ds, shuffle=True, num_workers=10, pin_memory=True, batch_size=args.batch_size)
 valid_loader = DataLoader(valid_ds, shuffle=False, num_workers=10, pin_memory=True, batch_size=args.batch_size)
@@ -48,8 +49,8 @@ model = get_model(args.name)
 model.to(0)
 model.train()
 
-criterion = BCEWithLogitsLoss()
-optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, weight_decay=5e-4, lr=5e-3)
+criterion = CrossEntropyLoss()
+optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, weight_decay=5e-4, lr=5e-2)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5,
                                                        patience=2,
                                                        verbose=True)
@@ -77,6 +78,12 @@ def print_data(loss, score, labels):
     stp += 1
 
 
+def top_n_indexes(arr, n):
+    idx = bottleneck.argpartition(arr, arr.size - n, axis=None)[-n:]
+    width = arr.shape[1]
+    return [divmod(i, width) for i in idx]
+
+
 def train(epoch):
     global stp
 
@@ -85,9 +92,10 @@ def train(epoch):
     start = time.time()
     start_epoch = time.time()
     it = tqdm(enumerate(train_loader))
-    for batch_idx, (x, labels) in it:
-        labels = labels.float()
 
+    scores = []
+
+    for batch_idx, (x, labels) in it:
         x, labels = x.cuda(), labels.cuda()
 
         out = model(x)
@@ -102,13 +110,13 @@ def train(epoch):
 
         lr_scheduler.step(loss, stp)
 
-        pred = (torch.sigmoid(output).squeeze().detach().cpu().numpy() > 0.5).astype(np.int)
+        pred = F.softmax(output).squeeze().detach().cpu().numpy()
         gt = labels.squeeze().detach().cpu().numpy()
+        pred = np.argmax(pred, axis=1)
+        score = accuracy_score(gt, pred)
 
-        pred = encoder.inverse_transform(pred)
-        gt = encoder.inverse_transform(gt)
+        scores.append(score)
 
-        score = accuracy_score(pred, gt)
         print_data(loss, score, labels)
 
         end = time.time()
@@ -116,12 +124,17 @@ def train(epoch):
 
         writer.add_images('wh1', 0.5 + x[0:DISP_NUM, :, :, :].squeeze())
 
-        it.set_description_str(f'train score {score}, loss {round(loss.item(),3)} gt {gt[0]}, pred {str(pred[0:2])}')
+        pp = str(pred[0])
+        it.set_description_str(f'train score {score}, loss {round(loss.item(),3)} gt {gt[0]}, pred {pp}')
         start = time.time()
-    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{loss}.pth'))
+
+    train_loss = np.array(train_loss)
+    scores = np.array(scores)
+
+    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{train_loss.mean()}.pth'))
     end = time.time()
     took = end - start_epoch
-    print('Train epoch: {} \tTook:{:.2f}'.format(epoch, took))
+    print('Train epoch: {} \tTook:{:.2f}, score: {}'.format(epoch, took, scores.mean()))
     return train_loss
 
 
@@ -130,11 +143,11 @@ def validate(epoch):
 
     valid_loss = []
 
+    scores = []
+
     start_epoch = time.time()
     it = tqdm(enumerate(train_loader))
     for batch_idx, (x, labels) in it:
-        labels = labels.float()
-
         x, labels = x.cuda(), labels.cuda()
 
         with torch.no_grad():
@@ -146,19 +159,22 @@ def validate(epoch):
         valid_loss.append(loss.item())
         optimizer.zero_grad()
 
-        pred = (torch.sigmoid(output).squeeze().detach().cpu().numpy() > 0.5).astype(np.int)
+        pred = F.softmax(output).squeeze().detach().cpu().numpy()
         gt = labels.squeeze().detach().cpu().numpy()
+        pred = np.argmax(pred, axis=1)
+        score = accuracy_score(gt, pred)
+        scores.append(score)
+        print_data(loss, score, labels)
 
-        pred = encoder.inverse_transform(pred)
-        gt = encoder.inverse_transform(gt)
+        pp = str(pred[0])
+        it.set_description_str(f'valid score {score}, valid loss {round(loss.item(),3)} gt {gt[0]}, pred {pp})')
 
-        score = accuracy_score(pred, gt)
-        it.set_description_str(f'valid score {score}, valid loss {round(loss.item(),3)} gt {gt[0]}, pred {str(pred[0:2])})')
-
-    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{loss}.pth'))
+    valid_loss = np.array(valid_loss)
+    scores = np.array(scores)
+    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{valid_loss.mean()}.pth'))
     end = time.time()
     took = end - start_epoch
-    print('Valid epoch: {} \tTook:{:.2f}'.format(epoch, took))
+    print('Valid epoch: {} \tTook:{:.2f}, score:{}'.format(epoch, took, scores.mean()))
     return valid_loss
 
 

@@ -3,22 +3,9 @@ from torchvision.models import resnet34
 from pretrainedmodels.models import se_resnext50_32x4d, se_resnet101
 
 
-def get_model(model_name='seamese_resnet34'):
-    if model_name == 'seamese_resnet34':
-        return Resnet34Seamese()
-    elif model_name == 'seamese_se_resnext50':
-        return SEResnext50Seamese()
-    elif model_name == 'classif_resnet34':
-        return classification_resnet34()
-    elif model_name == 'classif_se_resnet50':
-        return classification_se_resnext50()
-    elif model_name == 'classif_se_resnet101':
-        return classification_se_resnet101(no_new_whale=False)
-
-
 def classification_se_resnet101(no_new_whale=True):
     model = se_resnet101(pretrained='imagenet')
-    model.avg_pool = nn.AvgPool2d(7, stride=1)
+    model.avg_pool = nn.AvgPool2d(14, stride=1)
     if no_new_whale:
         model.last_linear = nn.Sequential(
             nn.Linear(2048, 5004)
@@ -40,6 +27,7 @@ def classification_resnet34():
 
 def classification_se_resnext50():
     model = se_resnext50_32x4d(pretrained='imagenet')
+    model.avg_pool = nn.AvgPool2d(12, stride=1)
     model.last_linear = nn.Linear(2048, 5005)
 
     return model

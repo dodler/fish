@@ -10,6 +10,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import *
 
 from args import get_parser
+from models.factory import get_model
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -20,7 +21,6 @@ print(torch.cuda.device_count())
 from torch.utils.data import DataLoader
 
 from data.ds_factory import get_classification_ds_with_new_whale
-from models import get_model
 from utils import get_aug
 import numpy as np
 import os.path as osp
@@ -50,7 +50,7 @@ model.to(0)
 model.train()
 
 criterion = CrossEntropyLoss()
-optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, weight_decay=5e-4, lr=5e-2)
+optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, weight_decay=5e-4, lr=5e-3)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5,
                                                        patience=2,
                                                        verbose=True)
@@ -92,6 +92,9 @@ def train(epoch):
     start = time.time()
     start_epoch = time.time()
     it = tqdm(enumerate(train_loader))
+
+    scores = []
+
     for batch_idx, (x, labels) in it:
         x, labels = x.cuda(), labels.cuda()
 
@@ -112,6 +115,8 @@ def train(epoch):
         pred = np.argmax(pred, axis=1)
         score = accuracy_score(gt, pred)
 
+        scores.append(score)
+
         print_data(loss, score, labels)
 
         end = time.time()
@@ -122,10 +127,14 @@ def train(epoch):
         pp = str(pred[0])
         it.set_description_str(f'train score {score}, loss {round(loss.item(),3)} gt {gt[0]}, pred {pp}')
         start = time.time()
-    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{loss}.pth'))
+
+    train_loss = np.array(train_loss)
+    scores = np.array(scores)
+
+    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{train_loss.mean()}.pth'))
     end = time.time()
     took = end - start_epoch
-    print('Train epoch: {} \tTook:{:.2f}'.format(epoch, took))
+    print('Train epoch: {} \tTook:{:.2f}, score: {}'.format(epoch, took, scores.mean()))
     return train_loss
 
 
@@ -133,6 +142,8 @@ def validate(epoch):
     model.eval()
 
     valid_loss = []
+
+    scores = []
 
     start_epoch = time.time()
     it = tqdm(enumerate(train_loader))
@@ -152,15 +163,18 @@ def validate(epoch):
         gt = labels.squeeze().detach().cpu().numpy()
         pred = np.argmax(pred, axis=1)
         score = accuracy_score(gt, pred)
+        scores.append(score)
         print_data(loss, score, labels)
 
         pp = str(pred[0])
         it.set_description_str(f'valid score {score}, valid loss {round(loss.item(),3)} gt {gt[0]}, pred {pp})')
 
-    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{loss}.pth'))
+    valid_loss = np.array(valid_loss)
+    scores = np.array(scores)
+    torch.save(model.state_dict(), osp.join(checkpoints_directory, f'{args.name}_{epoch}_{valid_loss.mean()}.pth'))
     end = time.time()
     took = end - start_epoch
-    print('Valid epoch: {} \tTook:{:.2f}'.format(epoch, took))
+    print('Valid epoch: {} \tTook:{:.2f}, score:{}'.format(epoch, took, scores.mean()))
     return valid_loss
 
 
